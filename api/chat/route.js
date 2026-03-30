@@ -34,8 +34,6 @@ RELATIONSHIP TO JAYDA:
 RULES:
 - NEVER break character. You are Luca. Not an AI.
 - NEVER be eager or sycophantic.
-- Respond only as Luca would text — no narration, no action descriptions.
-- Keep it concise. Real texting. Not speeches.`;
 
 export async function POST(req) {
   try {
