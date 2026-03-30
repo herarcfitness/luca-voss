@@ -22,6 +22,9 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Last assistant message variants for regenerate
+  const [variants, setVariants] = useState([]); // array of {text, time}
+  const [variantIndex, setVariantIndex] = useState(0);
   const bottomRef = useRef(null);
   const taRef = useRef(null);
 
@@ -29,11 +32,36 @@ export default function Home() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, variants, variantIndex]);
 
   useEffect(() => {
     if (error) { const t = setTimeout(() => setError(null), 6000); return () => clearTimeout(t); }
   }, [error]);
+
+  // The displayed messages — replace last assistant msg with current variant if variants exist
+  function getDisplayMessages() {
+    if (variants.length === 0) return messages;
+    // Replace the last assistant message with the current variant
+    const copy = [...messages];
+    for (let i = copy.length - 1; i >= 0; i--) {
+      if (copy[i].role === "assistant") {
+        copy[i] = { ...copy[i], ...variants[variantIndex] };
+        break;
+      }
+    }
+    return copy;
+  }
+
+  async function fetchReply(history) {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+    });
+    const data = await res.json();
+    if (data.reply) return data.reply;
+    throw new Error(data.error || "No response.");
+  }
 
   async function send() {
     const text = input.trim();
@@ -41,35 +69,73 @@ export default function Home() {
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
 
+    // If variants exist, commit the current variant into messages before adding new user msg
+    let base = messages;
+    if (variants.length > 0) {
+      base = getDisplayMessages();
+      saveMsgs(base);
+    }
+
+    setVariants([]);
+    setVariantIndex(0);
+
     const userMsg = { role: "user", text, time: getTime() };
-    const next = [...messages, userMsg];
+    const next = [...base, userMsg];
     setMessages(next);
     saveMsgs(next);
     setLoading(true);
     setError(null);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next }),
-      });
-
-      const data = await res.json();
-
-      if (data.reply) {
-        const final = [...next, { role: "assistant", text: data.reply, time: getTime() }];
-        setMessages(final);
-        saveMsgs(final);
-      } else {
-        setError(data.error || "No response.");
-      }
+      const reply = await fetchReply(next);
+      const assistantMsg = { role: "assistant", text: reply, time: getTime() };
+      const final = [...next, assistantMsg];
+      setMessages(final);
+      saveMsgs(final);
+      setVariants([{ text: reply, time: assistantMsg.time }]);
+      setVariantIndex(0);
     } catch (e) {
-      setError("Connection error. Try again.");
+      setError(e.message || "Connection error. Try again.");
     }
 
     setLoading(false);
     taRef.current?.focus();
+  }
+
+  async function regenerate() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+
+    // Build history without the last assistant message
+    const historyWithoutLast = [...messages];
+    for (let i = historyWithoutLast.length - 1; i >= 0; i--) {
+      if (historyWithoutLast[i].role === "assistant") {
+        historyWithoutLast.splice(i, 1);
+        break;
+      }
+    }
+
+    try {
+      const reply = await fetchReply(historyWithoutLast);
+      const newVariant = { text: reply, time: getTime() };
+      const newVariants = [...variants, newVariant];
+      setVariants(newVariants);
+      setVariantIndex(newVariants.length - 1);
+    } catch (e) {
+      setError(e.message || "Connection error. Try again.");
+    }
+
+    setLoading(false);
+    taRef.current?.focus();
+  }
+
+  function prevVariant() {
+    setVariantIndex(i => Math.max(0, i - 1));
+  }
+
+  function nextVariant() {
+    setVariantIndex(i => Math.min(variants.length - 1, i + 1));
   }
 
   function handleKey(e) {
@@ -84,10 +150,15 @@ export default function Home() {
   function clearChat() {
     if (!confirm("Clear this conversation?")) return;
     setMessages([]);
+    setVariants([]);
+    setVariantIndex(0);
     localStorage.removeItem(STORAGE_KEY);
   }
 
   const isLuca = r => r === "assistant";
+  const displayMessages = getDisplayMessages();
+  const hasVariants = variants.length > 1;
+  const showRegenerateBar = variants.length > 0 && !loading;
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100dvh", background:"#f0ebe3", fontFamily:"Georgia,serif", maxWidth:640, margin:"0 auto" }}>
@@ -100,7 +171,7 @@ export default function Home() {
         </div>
         <div style={{ flex:1 }}>
           <div style={{ fontStyle:"italic", fontSize:18, color:"#1a1714", lineHeight:1 }}>Luca Voss</div>
-          <div style={{ fontSize:10, color:"#8a8178", letterSpacing:"0.09em", textTransform:"uppercase", marginTop:3, fontFamily:"monospace" }}>painter · chicago</div>
+          <div style={{ fontSize:10, color:"#8a8178", letterSpacing:"0.09em", textTransform:"uppercase", marginTop:3, fontFamily:"monospace" }}>painter · east london</div>
         </div>
         <button onClick={clearChat} style={{ fontFamily:"monospace", fontSize:9, letterSpacing:"0.06em", textTransform:"uppercase", color:"#8a8178", background:"none", border:"1px solid #ddd6cc", padding:"4px 9px", cursor:"pointer", borderRadius:2 }}>
           clear
@@ -110,35 +181,57 @@ export default function Home() {
       {/* Messages */}
       <div style={{ flex:1, overflowY:"auto", padding:"24px 18px", display:"flex", flexDirection:"column", gap:18 }}>
 
-        {messages.length === 0 && (
+        {displayMessages.length === 0 && (
           <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, textAlign:"center", padding:40 }}>
             <div style={{ fontStyle:"italic", fontSize:34, color:"#1a1714", opacity:0.15, letterSpacing:"0.06em" }}>Luca Voss</div>
             <div style={{ fontSize:10, color:"#8a8178", letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"monospace" }}>say something. he might respond.</div>
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} style={{ display:"flex", flexDirection:"column", alignSelf: isLuca(msg.role) ? "flex-start" : "flex-end", alignItems: isLuca(msg.role) ? "flex-start" : "flex-end", maxWidth:"80%" }}>
-            <div style={{ fontSize:9, letterSpacing:"0.1em", textTransform:"uppercase", color:"#8a8178", marginBottom:4, fontFamily:"monospace" }}>
-              {isLuca(msg.role) ? "Luca" : "Jayda"}
+        {displayMessages.map((msg, i) => {
+          const isLastAssistant = isLuca(msg.role) && i === displayMessages.length - 1;
+          return (
+            <div key={i} style={{ display:"flex", flexDirection:"column", alignSelf: isLuca(msg.role) ? "flex-start" : "flex-end", alignItems: isLuca(msg.role) ? "flex-start" : "flex-end", maxWidth:"80%" }}>
+              <div style={{ fontSize:9, letterSpacing:"0.1em", textTransform:"uppercase", color:"#8a8178", marginBottom:4, fontFamily:"monospace" }}>
+                {isLuca(msg.role) ? "Luca" : "Jayda"}
+              </div>
+              <div style={{
+                padding:"11px 15px",
+                background: isLuca(msg.role) ? "#ffffff" : "#1a1714",
+                color: isLuca(msg.role) ? "#1a1714" : "#f0ebe3",
+                border: isLuca(msg.role) ? "1px solid #ddd6cc" : "none",
+                borderRadius:2,
+                borderTopLeftRadius: isLuca(msg.role) ? 0 : 2,
+                borderTopRightRadius: isLuca(msg.role) ? 2 : 0,
+                fontFamily: isLuca(msg.role) ? "Georgia,serif" : "monospace",
+                fontSize: isLuca(msg.role) ? 15 : 12,
+                lineHeight:1.7,
+                boxShadow: isLuca(msg.role) ? "2px 2px 10px rgba(26,23,20,0.09)" : "none",
+                whiteSpace:"pre-wrap", wordBreak:"break-word",
+              }}>{msg.text}</div>
+
+              {/* Regenerate controls — only on last Luca message */}
+              {isLastAssistant && showRegenerateBar && (
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6 }}>
+                  {hasVariants && (
+                    <button onClick={prevVariant} disabled={variantIndex === 0} style={{ background:"none", border:"none", cursor: variantIndex === 0 ? "not-allowed" : "pointer", color: variantIndex === 0 ? "#ccc5bc" : "#8a8178", fontSize:14, padding:"0 2px", lineHeight:1 }}>‹</button>
+                  )}
+                  <button onClick={regenerate} disabled={loading} style={{ fontFamily:"monospace", fontSize:9, letterSpacing:"0.07em", textTransform:"uppercase", color:"#8a8178", background:"none", border:"1px solid #ddd6cc", padding:"3px 8px", cursor: loading ? "not-allowed" : "pointer", borderRadius:2 }}>
+                    regenerate
+                  </button>
+                  {hasVariants && (
+                    <button onClick={nextVariant} disabled={variantIndex === variants.length - 1} style={{ background:"none", border:"none", cursor: variantIndex === variants.length - 1 ? "not-allowed" : "pointer", color: variantIndex === variants.length - 1 ? "#ccc5bc" : "#8a8178", fontSize:14, padding:"0 2px", lineHeight:1 }}>›</button>
+                  )}
+                  {hasVariants && (
+                    <span style={{ fontSize:9, color:"#8a8178", fontFamily:"monospace", letterSpacing:"0.05em" }}>{variantIndex + 1}/{variants.length}</span>
+                  )}
+                </div>
+              )}
+
+              <div style={{ fontSize:9, color:"#8a8178", marginTop:4, letterSpacing:"0.06em", fontFamily:"monospace" }}>{msg.time}</div>
             </div>
-            <div style={{
-              padding:"11px 15px",
-              background: isLuca(msg.role) ? "#ffffff" : "#1a1714",
-              color: isLuca(msg.role) ? "#1a1714" : "#f0ebe3",
-              border: isLuca(msg.role) ? "1px solid #ddd6cc" : "none",
-              borderRadius:2,
-              borderTopLeftRadius: isLuca(msg.role) ? 0 : 2,
-              borderTopRightRadius: isLuca(msg.role) ? 2 : 0,
-              fontFamily: isLuca(msg.role) ? "Georgia,serif" : "monospace",
-              fontSize: isLuca(msg.role) ? 15 : 12,
-              lineHeight:1.7,
-              boxShadow: isLuca(msg.role) ? "2px 2px 10px rgba(26,23,20,0.09)" : "none",
-              whiteSpace:"pre-wrap", wordBreak:"break-word",
-            }}>{msg.text}</div>
-            <div style={{ fontSize:9, color:"#8a8178", marginTop:4, letterSpacing:"0.06em", fontFamily:"monospace" }}>{msg.time}</div>
-          </div>
-        ))}
+          );
+        })}
 
         {loading && (
           <div style={{ alignSelf:"flex-start", display:"flex", alignItems:"center", gap:5, padding:"13px 16px", background:"#ffffff", border:"1px solid #ddd6cc", borderRadius:2, borderTopLeftRadius:0, boxShadow:"2px 2px 10px rgba(26,23,20,0.09)" }}>
