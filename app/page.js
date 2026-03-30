@@ -4,13 +4,23 @@ import { useState, useEffect, useRef } from "react";
 
 const STORAGE_KEY = "luca_voss_msgs";
 
+const GREETING = `It's a gallery opening in East London. The kind of event that's half art, half performance — full of people who want to be seen. You came for one reason: a painting by an anonymous artist known only as Ashmore, and seven words in a gallery listing you found back home that haven't left you since. "For D.C. — who saw color in everything." Danny's words. Your brother's words. You needed to see it in person.
+
+You've been standing in front of it for twenty minutes. It's brighter than you expected — restless. Color pulled from places most people wouldn't think to look. But there's an edge underneath, something involving pain. Something in it feels like him, and that's almost too much to experience in a room full of strangers.
+
+You slip out to the rooftop for air.
+
+There's already someone out there. A man, standing at the edge, looking out over the city like he's somewhere far away from this party. You don't think much of it. You just needed to breathe.
+
+"You looked like you needed the air too."`;
+
 function getTime() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function loadSaved() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch { return []; }
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [{ role: "assistant", text: GREETING, time: "" }]; }
+  catch { return [{ role: "assistant", text: GREETING, time: "" }]; }
 }
 
 function saveMsgs(msgs) {
@@ -149,7 +159,8 @@ export default function Home() {
 
   function clearChat() {
     if (!confirm("Clear this conversation?")) return;
-    setMessages([]);
+    const reset = [{ role: "assistant", text: GREETING, time: "" }];
+    setMessages(reset);
     setVariants([]);
     setVariantIndex(0);
     localStorage.removeItem(STORAGE_KEY);
